@@ -461,13 +461,13 @@
 
     <script>
         // ============================================================
-        // ТЕЛЕГРАМ: вставьте сюда токен бота и ID чата
-        // 1) Создайте бота через @BotFather и скопируйте токен
-        // 2) Напишите боту /start, затем узнайте свой chat_id
-        //    (например, через @userinfobot) и вставьте ниже
+        // ТЕЛЕГРАМ
+        // 1) Токен от @BotFather
+        // 2) Каждый получатель ОБЯЗАН написать боту /start
+        // 3) Несколько chat_id — через запятую (каждый получит свою копию)
         // ============================================================
         const TELEGRAM_BOT_TOKEN = '8634428378:AAEfqTRqgLk0F1JfAmRN7lJw2OoWqbd4DI0';
-        const TELEGRAM_CHAT_ID = '7303021646,278450573';
+        const TELEGRAM_CHAT_IDS = '7303021646,278450573';
 
         function toggleMenu() {
             const menu = document.getElementById('mobileMenu');
@@ -526,37 +526,66 @@
             this.value = maskPhone(this.value);
         });
 
-        async function sendToTelegram(text) {
-            const configured = TELEGRAM_BOT_TOKEN && !TELEGRAM_BOT_TOKEN.startsWith('YOUR_')
-                && TELEGRAM_CHAT_ID && !String(TELEGRAM_CHAT_ID).startsWith('YOUR_');
+        function getChatIds() {
+            return String(TELEGRAM_CHAT_IDS)
+                .split(/[\s,;]+/)
+                .map(function (id) { return id.trim(); })
+                .filter(Boolean);
+        }
 
-            if (!configured) {
-                console.warn('Вставьте TELEGRAM_BOT_TOKEN и TELEGRAM_CHAT_ID в index.html');
-                return { ok: true, demo: true };
-            }
-
-            const endpoint = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-
-            try {
-                const response = await fetch(endpoint, {
+        async function sendToOneChat(chatId, text) {
+            const response = await fetch(
+                'https://api.telegram.org/bot' + TELEGRAM_BOT_TOKEN + '/sendMessage',
+                {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        chat_id: TELEGRAM_CHAT_ID,
+                        chat_id: chatId,
                         text: text
                     })
-                });
-                if (!response.ok) throw new Error('Telegram HTTP ' + response.status);
-                return { ok: true };
-            } catch (error) {
-                return new Promise((resolve) => {
-                    const img = new Image();
-                    const query = `?chat_id=${encodeURIComponent(TELEGRAM_CHAT_ID)}&text=${encodeURIComponent(text)}`;
-                    img.onload = img.onerror = function () { resolve({ ok: true, fallback: true }); };
-                    img.src = endpoint + query;
-                    setTimeout(function () { resolve({ ok: true, fallback: true }); }, 1800);
-                });
+                }
+            );
+            const data = await response.json().catch(function () { return null; });
+            if (!response.ok || !data || !data.ok) {
+                const reason = (data && data.description) || ('HTTP ' + response.status);
+                throw new Error(chatId + ': ' + reason);
             }
+            return data;
+        }
+
+        async function sendToTelegram(text) {
+            const configured = TELEGRAM_BOT_TOKEN && !TELEGRAM_BOT_TOKEN.startsWith('YOUR_')
+                && String(TELEGRAM_CHAT_IDS).trim() && !String(TELEGRAM_CHAT_IDS).startsWith('YOUR_');
+
+            if (!configured) {
+                throw new Error('Не настроены TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_IDS');
+            }
+
+            const chatIds = getChatIds();
+            if (!chatIds.length) {
+                throw new Error('Список chat_id пуст');
+            }
+
+            const results = await Promise.allSettled(
+                chatIds.map(function (chatId) {
+                    return sendToOneChat(chatId, text);
+                })
+            );
+
+            const okCount = results.filter(function (r) { return r.status === 'fulfilled'; }).length;
+            const errors = results
+                .filter(function (r) { return r.status === 'rejected'; })
+                .map(function (r) { return r.reason && r.reason.message ? r.reason.message : String(r.reason); });
+
+            if (okCount === 0) {
+                throw new Error(errors.join('; ') || 'Не удалось отправить ни одному получателю');
+            }
+
+            if (errors.length) {
+                console.warn('Часть заявок не доставлена:', errors.join('; '));
+            }
+
+            return { ok: true, delivered: okCount, failed: errors.length };
         }
 
         async function handleFormSubmit(event) {
@@ -587,7 +616,8 @@
                 document.getElementById('successMessage').classList.remove('hidden');
                 setTimeout(closeModal, 3000);
             } catch (error) {
-                errorEl.textContent = 'Не удалось отправить заявку. Позвоните, пожалуйста: +7 (981) 956-82-28';
+                console.error(error);
+                errorEl.textContent = 'Не удалось отправить заявку. Проверьте, что получатели написали боту /start. Или позвоните: +7 (981) 956-82-28';
                 errorEl.classList.remove('hidden');
                 btn.disabled = false;
                 btn.textContent = 'Отправить заявку';
